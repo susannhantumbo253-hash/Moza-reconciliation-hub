@@ -172,6 +172,9 @@ def reconcile_atm(source_file, target_file, request: gr.Request):
 def reconcile_pos(source_file, target_file, request: gr.Request):
     return reconcile_process(source_file, target_file, "POS", "POS", "CORE POS", request)
 
+def reconcile_metix(source_file, target_file, request: gr.Request):
+    return reconcile_process(source_file, target_file, "METIX", "METIX", "CORE METIX", request)
+
 def load_dashboard():
     with sqlite3.connect(DB_PATH) as conn:
         totals = pd.read_sql_query("""SELECT COUNT(*) AS total_runs, COALESCE(SUM(total_records),0) AS total_records, COALESCE(SUM(reconciled_records),0) AS reconciled_records, COALESCE(SUM(exception_records),0) AS exception_records, COALESCE(SUM(exception_value),0) AS exception_value FROM reconciliation_runs""", conn).iloc[0]
@@ -253,6 +256,20 @@ with gr.Blocks(css=CSS, title="Moza Reconciliation Hub") as demo:
             pos_csv_download = gr.File(label="Resultado POS em CSV")
         pos_run_button.click(reconcile_pos, [pos_source_file, pos_target_file], [pos_summary, pos_results, pos_chart, pos_excel_download, pos_csv_download])
 
+    with gr.Tab("Reconciliação METIX"):
+        gr.Markdown("### Carregamento de ficheiros METIX\nOs ficheiros devem conter `reference`, `transaction_date`, `amount`. As colunas `transaction_id`, `account_number`, `transaction_type`, `currency` e `status` podem ser mantidas para análise operacional.")
+        with gr.Row():
+            metix_source_file = gr.File(label="Ficheiro de transações METIX", file_types=[".csv", ".xlsx", ".xls"], type="filepath")
+            metix_target_file = gr.File(label="Ficheiro Core Banking METIX", file_types=[".csv", ".xlsx", ".xls"], type="filepath")
+        metix_run_button = gr.Button("Executar reconciliação METIX", elem_classes=["primary-btn"])
+        metix_summary = gr.HTML()
+        metix_results = gr.Dataframe(label="Resultado detalhado METIX", interactive=False, wrap=True)
+        metix_chart = gr.Plot(label="Dashboard METIX")
+        with gr.Row():
+            metix_excel_download = gr.File(label="Relatório METIX em Excel")
+            metix_csv_download = gr.File(label="Resultado METIX em CSV")
+        metix_run_button.click(reconcile_metix, [metix_source_file, metix_target_file], [metix_summary, metix_results, metix_chart, metix_excel_download, metix_csv_download])
+
     with gr.Tab("Gestão de Exceções"):
         gr.Markdown("## Exceções", elem_classes=["section-title"])
         refresh_exceptions = gr.Button("Atualizar lista de exceções")
@@ -284,7 +301,7 @@ with gr.Blocks(css=CSS, title="Moza Reconciliation Hub") as demo:
         gr.Markdown('<div class="module-note"><h3>Administração</h3><p>Área preparada para gestão de utilizadores, perfis e permissões.</p><p>Perfis previstos: Administrador, Supervisor, Operador, Auditor e Gestor.</p></div>')
 
     with gr.Tab("Próximos Módulos"):
-        gr.Markdown('<div class="module-note"><h3>Roadmap funcional</h3><ul><li>METIX</li><li>Compensação</li><li>Interoperabilidade</li><li>Conta Float</li><li>Conta Real Time</li><li>Maker–Checker</li><li>PDF e envio automático por e-mail</li><li>Integração com Power Automate e Power BI</li></ul></div>')
+        gr.Markdown('<div class="module-note"><h3>Roadmap funcional</h3><ul><li>METIX — implementado</li><li>Compensação</li><li>Interoperabilidade</li><li>Conta Float</li><li>Conta Real Time</li><li>Maker–Checker</li><li>PDF e envio automático por e-mail</li><li>Integração com Power Automate e Power BI</li></ul></div>')
 
 if __name__ == "__main__":
     username = os.getenv("APP_USERNAME", "admin")
