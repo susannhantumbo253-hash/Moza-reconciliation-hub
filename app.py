@@ -28,6 +28,12 @@ PROCESS_CONFIG = {
     "COMPENSAÇÃO": ("Compensação", "Core Banking Compensação"),
 }
 
+USER_ROLES = {
+    "admin": "Administrador",
+    "supervisor": "Supervisor",
+    "operador": "Operador",
+}
+
 def get_connection():
     return sqlite3.connect(DB_PATH)
 
@@ -78,12 +84,28 @@ def write_log(username, action, details=""):
         )
         conn.commit()
 
+def get_role(username):
+    return USER_ROLES.get((username or "").strip(), "Utilizador")
+
 def login(username, password):
     username = (username or "").strip()
     if username in USERS and USERS[username] == (password or ""):
-        write_log(username, "LOGIN", "Sessão iniciada")
-        return gr.update(visible=False), gr.update(visible=True), f"✅ Bem-vindo(a), **{username}**", username, ""
-    return gr.update(visible=True), gr.update(visible=False), "❌ Utilizador ou palavra-passe incorretos.", "", ""
+        role = get_role(username)
+        write_log(username, "LOGIN", f"Sessão iniciada; Perfil={role}")
+        return (
+            gr.update(visible=False),
+            gr.update(visible=True),
+            f"✅ Bem-vindo(a), **{username}** — Perfil: **{role}**",
+            username,
+            "",
+        )
+    return (
+        gr.update(visible=True),
+        gr.update(visible=False),
+        "❌ Utilizador ou palavra-passe incorretos.",
+        "",
+        "",
+    )
 
 def logout(current_user):
     if current_user:
@@ -367,6 +389,88 @@ def load_exceptions(current_user):
             conn,
         )
 
+
+def search_exceptions(reference, process_type, status, current_user):
+    if not current_user:
+        raise gr.Error("Faça login primeiro.")
+
+    query = """
+        SELECT id, created_at AS data, process_type AS processo,
+               reference AS referencia, exception_type AS tipo_excecao,
+               amount_source AS valor_origem, amount_target AS valor_destino,
+               amount_difference AS diferenca, status,
+               assigned_to AS responsavel, resolution_comment AS comentario
+        FROM exceptions
+        WHERE 1=1
+    """
+    params = []
+
+    if reference:
+        query += " AND UPPER(reference) LIKE ?"
+        params.append(f"%{reference.strip().upper()}%")
+
+    if process_type and process_type != "TODOS":
+        query += " AND process_type = ?"
+        params.append(process_type)
+
+    if status and status != "TODOS":
+        query += " AND status = ?"
+        params.append(status)
+
+    query += " ORDER BY id DESC LIMIT 500"
+
+    with get_connection() as conn:
+        result = pd.read_sql_query(query, conn, params=params)
+
+    write_log(
+        current_user,
+        "PESQUISA_EXCECOES",
+        f"Referencia={reference or '-'}; Processo={process_type}; Estado={status}",
+    )
+    return result
+
+
+def filter_reports(process_type, start_date, end_date, current_user):
+    if not current_user:
+        raise gr.Error("Faça login primeiro.")
+
+    query = """
+        SELECT id AS execucao, created_at AS data, username AS utilizador,
+               process_type AS processo, total_records AS total,
+               reconciled_records AS reconciliados,
+               exception_records AS excecoes,
+               ROUND(reconciliation_rate, 2) AS taxa_percentagem,
+               ROUND(exception_value, 2) AS valor_diferencas
+        FROM reconciliation_runs
+        WHERE 1=1
+    """
+    params = []
+
+    if process_type and process_type != "TODOS":
+        query += " AND process_type = ?"
+        params.append(process_type)
+
+    if start_date:
+        query += " AND date(created_at) >= date(?)"
+        params.append(start_date)
+
+    if end_date:
+        query += " AND date(created_at) <= date(?)"
+        params.append(end_date)
+
+    query += " ORDER BY id DESC LIMIT 500"
+
+    with get_connection() as conn:
+        result = pd.read_sql_query(query, conn, params=params)
+
+    write_log(
+        current_user,
+        "FILTRO_RELATORIOS",
+        f"Processo={process_type}; Inicio={start_date or '-'}; Fim={end_date or '-'}",
+    )
+    return result
+
+
 def update_exception(exception_id, new_status, assigned_to, comment, current_user):
     if not current_user:
         raise gr.Error("Faça login primeiro.")
@@ -457,7 +561,7 @@ with gr.Blocks(css=CSS, title="Moza Reconciliation Hub") as demo:
     current_user = gr.State("")
     gr.HTML(
         '<div id="topbar"><h1>MOZA RECONCILIATION HUB</h1>'
-        '<p>Plataforma Integrada de Reconciliação, Gestão de Exceções e Auditoria</p></div>'
+        '<p>Enterprise V2 — Reconciliação, Exceções, Relatórios e Auditoria</p></div>'
     )
 
     with gr.Column(visible=True, elem_id="login-box") as login_panel:
@@ -497,9 +601,50 @@ with gr.Blocks(css=CSS, title="Moza Reconciliation Hub") as demo:
             build_reconciliation_tab("COMPENSAÇÃO", "Ficheiro de Compensação", "Ficheiro Core Banking Compensação", reconcile_compensation, current_user)
 
         with gr.Tab("Gestão de Exceções"):
-            refresh_exceptions = gr.Button("Atualizar lista de exceções")
+            gr.Markdown("## Pesquisa e Gestão de Exceções")
+
+            with gr.Row():
+                exception_search_reference = gr.Textbox(
+                    label="Pesquisar referência",
+                    placeholder="Ex.: ATM001",
+                )
+                exception_search_process = gr.Dropdown(
+                    choices=["TODOS", "ATM", "POS", "METIX", "COMPENSAÇÃO"],
+                    value="TODOS",
+                    label="Processo",
+                )
+                exception_search_status = gr.Dropdown(
+                    choices=["TODOS", "PENDENTE", "EM ANÁLISE", "RESOLVIDA", "REJEITADA"],
+                    value="TODOS",
+                    label="Estado",
+                )
+
+            with gr.Row():
+                search_exceptions_button = gr.Button(
+                    "Pesquisar",
+                    elem_classes=["primary-btn"],
+                )
+                refresh_exceptions = gr.Button("Mostrar todas")
+
             exceptions_table = gr.Dataframe(interactive=False, wrap=True)
-            refresh_exceptions.click(load_exceptions, inputs=[current_user], outputs=[exceptions_table])
+
+            search_exceptions_button.click(
+                search_exceptions,
+                inputs=[
+                    exception_search_reference,
+                    exception_search_process,
+                    exception_search_status,
+                    current_user,
+                ],
+                outputs=[exceptions_table],
+            )
+
+            refresh_exceptions.click(
+                load_exceptions,
+                inputs=[current_user],
+                outputs=[exceptions_table],
+            )
+
             gr.Markdown("### Atualizar uma exceção")
             with gr.Row():
                 exception_id = gr.Number(label="ID da exceção", precision=0)
@@ -519,9 +664,48 @@ with gr.Blocks(css=CSS, title="Moza Reconciliation Hub") as demo:
             )
 
         with gr.Tab("Relatórios"):
-            refresh_reports = gr.Button("Atualizar relatórios")
+            gr.Markdown("## Histórico e Filtros de Relatórios")
+
+            with gr.Row():
+                report_process_filter = gr.Dropdown(
+                    choices=["TODOS", "ATM", "POS", "METIX", "COMPENSAÇÃO"],
+                    value="TODOS",
+                    label="Processo",
+                )
+                report_start_date = gr.Textbox(
+                    label="Data inicial",
+                    placeholder="AAAA-MM-DD",
+                )
+                report_end_date = gr.Textbox(
+                    label="Data final",
+                    placeholder="AAAA-MM-DD",
+                )
+
+            with gr.Row():
+                filter_reports_button = gr.Button(
+                    "Aplicar filtros",
+                    elem_classes=["primary-btn"],
+                )
+                refresh_reports = gr.Button("Mostrar todos")
+
             reports_table = gr.Dataframe(interactive=False, wrap=True)
-            refresh_reports.click(load_reports, inputs=[current_user], outputs=[reports_table])
+
+            filter_reports_button.click(
+                filter_reports,
+                inputs=[
+                    report_process_filter,
+                    report_start_date,
+                    report_end_date,
+                    current_user,
+                ],
+                outputs=[reports_table],
+            )
+
+            refresh_reports.click(
+                load_reports,
+                inputs=[current_user],
+                outputs=[reports_table],
+            )
 
         with gr.Tab("Auditoria"):
             refresh_logs = gr.Button("Atualizar logs")
