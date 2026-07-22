@@ -1257,9 +1257,10 @@ with gr.Blocks(
             - permissões;
             - configurações do sistema.
             """
-        )
-        if __name__ == "__main__":
-    demo.launch(
+        ) 
+        
+  if __name__ == "__main__":
+        demo.launch(
         server_name="0.0.0.0",
         server_port=PORT,
         show_error=True,
